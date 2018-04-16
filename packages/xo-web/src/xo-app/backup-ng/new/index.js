@@ -7,21 +7,21 @@ import Tooltip from 'tooltip'
 import Upgrade from 'xoa-upgrade'
 import { addSubscriptions, resolveId, resolveIds } from 'utils'
 import { Card, CardBlock, CardHeader } from 'card'
+import { constructSmartPattern, destructSmartPattern } from 'smart-backup'
 import { Container, Col, Row } from 'grid'
+import { injectState, provideState } from '@julien-f/freactal'
+import { SelectRemote, SelectSr, SelectVm } from 'select-objects'
+import { Toggle } from 'form'
 import {
   find,
   findKey,
   flatten,
-  keyBy,
   includes,
   isEmpty,
+  keyBy,
   map,
   some,
 } from 'lodash'
-import { injectState, provideState } from '@julien-f/freactal'
-import { Toggle } from 'form'
-import { constructSmartPattern, destructSmartPattern } from 'smart-backup'
-import { SelectRemote, SelectSr, SelectVm } from 'select-objects'
 import {
   createBackupNgJob,
   createSchedule,
@@ -33,7 +33,7 @@ import {
 
 import Schedules from './schedules'
 import SmartBackup from './smart-backup'
-import { FormGroup, getRandomId, Input, Ul, Li } from './utils'
+import { FormFeedback, FormGroup, getRandomId, Input, Ul, Li } from './utils'
 
 // ===================================================================
 
@@ -105,6 +105,7 @@ const getInitialState = () => ({
   remotes: [],
   schedules: [],
   settings: {},
+  showErrors: false,
   smartMode: false,
   snapshotMode: false,
   srs: [],
@@ -129,6 +130,13 @@ export default [
     initialState: getInitialState,
     effects: {
       createJob: () => async state => {
+        if (state.isJobInvalid) {
+          return {
+            ...state,
+            showErrors: true,
+          }
+        }
+
         await createBackupNgJob({
           name: state.name,
           mode: state.isDelta ? 'delta' : 'full',
@@ -151,6 +159,13 @@ export default [
         })
       },
       editJob: () => async (state, props) => {
+        if (state.isJobInvalid) {
+          return {
+            ...state,
+            showErrors: true,
+          }
+        }
+
         const newSettings = {}
         if (!isEmpty(state.newSchedules)) {
           await Promise.all(
@@ -460,14 +475,27 @@ export default [
       needUpdateParams: (state, { job, schedules }) =>
         job !== undefined && schedules !== undefined && !state.paramsUpdated,
       isJobInvalid: state =>
-        state.name.trim() === '' ||
-        (isEmpty(state.schedules) && isEmpty(state.newSchedules)) ||
-        (isEmpty(state.vms) && !state.smartMode) ||
-        ((state.backupMode || state.deltaMode) && isEmpty(state.remotes)) ||
-        ((state.drMode || state.crMode) && isEmpty(state.srs)) ||
-        (state.exportMode && !state.exportRetentionExists) ||
-        (state.snapshotMode && !state.snapshotRetentionExists) ||
-        (!state.isDelta && !state.isFull && !state.snapshotMode),
+        state.missingName ||
+        state.missingVms ||
+        state.missingBackupMode ||
+        state.missingSchedules ||
+        state.missingRemotes ||
+        state.missingSrs ||
+        state.missingExportRetention ||
+        state.missingSnapshotRetention,
+      missingName: state => state.name.trim() === '',
+      missingVms: state => isEmpty(state.vms) && !state.smartMode,
+      missingBackupMode: state =>
+        !state.isDelta && !state.isFull && !state.snapshotMode,
+      missingRemotes: state =>
+        (state.backupMode || state.deltaMode) && isEmpty(state.remotes),
+      missingSrs: state => (state.drMode || state.crMode) && isEmpty(state.srs),
+      missingSchedules: state =>
+        isEmpty(state.schedules) && isEmpty(state.newSchedules),
+      missingExportRetention: state =>
+        state.exportMode && !state.exportRetentionExists,
+      missingSnapshotRetention: state =>
+        state.snapshotMode && !state.snapshotRetentionExists,
       showCompression: state => state.isFull && state.exportRetentionExists,
       exportMode: state =>
         state.backupMode || state.deltaMode || state.drMode || state.crMode,
@@ -506,7 +534,7 @@ export default [
             <Col mediumSize={6}>
               <Card>
                 <CardHeader>
-                  {_('backupName')}
+                  {_('backupName')}*
                   <Tooltip content={_('smartBackupModeTitle')}>
                     <Toggle
                       className='pull-right'
@@ -521,7 +549,15 @@ export default [
                     <label>
                       <strong>{_('backupName')}</strong>
                     </label>
-                    <Input onChange={effects.setName} value={state.name} />
+                    <FormFeedback
+                      component={Input}
+                      error={_('missingBackupName')}
+                      onChange={effects.setName}
+                      showError={
+                        state.showErrors ? state.missingName : undefined
+                      }
+                      value={state.name}
+                    />
                   </FormGroup>
                   {state.smartMode ? (
                     <Upgrade place='newBackup' required={3}>
@@ -532,9 +568,14 @@ export default [
                       <label>
                         <strong>{_('vmsToBackup')}</strong>
                       </label>
-                      <SelectVm
+                      <FormFeedback
+                        component={SelectVm}
+                        error={_('missingVms')}
                         multi
                         onChange={effects.setVms}
+                        showError={
+                          state.showErrors ? state.missingVms : undefined
+                        }
                         value={state.vms}
                       />
                     </FormGroup>
@@ -551,7 +592,13 @@ export default [
                   )}
                 </CardBlock>
               </Card>
-              <Card>
+              <FormFeedback
+                component={Card}
+                error={_('missingBackupMode')}
+                showError={
+                  state.showErrors ? state.missingBackupMode : undefined
+                }
+              >
                 <CardBlock>
                   <div className='text-xs-center'>
                     <ActionButton
@@ -619,7 +666,8 @@ export default [
                     )}
                   </div>
                 </CardBlock>
-              </Card>
+              </FormFeedback>
+              <br />
               {(state.backupMode || state.deltaMode) && (
                 <Card>
                   <CardHeader>
@@ -630,9 +678,14 @@ export default [
                       <label>
                         <strong>{_('backupTargetRemotes')}</strong>
                       </label>
-                      <SelectRemote
+                      <FormFeedback
+                        component={SelectRemote}
+                        error={_('missingRemotes')}
                         onChange={effects.addRemote}
                         predicate={state.remotePredicate}
+                        showError={
+                          state.showErrors ? state.missingRemotes : undefined
+                        }
                         value={null}
                       />
                       <br />
@@ -673,9 +726,14 @@ export default [
                       <label>
                         <strong>{_('backupTargetSrs')}</strong>
                       </label>
-                      <SelectSr
+                      <FormFeedback
+                        component={SelectSr}
+                        error={_('missingSrs')}
                         onChange={effects.addSr}
                         predicate={state.srPredicate}
+                        showError={
+                          state.showErrors ? state.missingSrs : undefined
+                        }
                         value={null}
                       />
                       <br />
@@ -709,11 +767,12 @@ export default [
                 {state.paramsUpdated ? (
                   <ActionButton
                     btnStyle='primary'
-                    disabled={state.isJobInvalid}
                     form={state.formId}
                     handler={effects.editJob}
                     icon='save'
-                    redirectOnSuccess='/backup-ng'
+                    redirectOnSuccess={
+                      state.isJobInvalid ? undefined : '/backup-ng'
+                    }
                     size='large'
                   >
                     {_('formSave')}
@@ -721,11 +780,12 @@ export default [
                 ) : (
                   <ActionButton
                     btnStyle='primary'
-                    disabled={state.isJobInvalid}
                     form={state.formId}
                     handler={effects.createJob}
                     icon='save'
-                    redirectOnSuccess='/backup-ng'
+                    redirectOnSuccess={
+                      state.isJobInvalid ? undefined : '/backup-ng'
+                    }
                     size='large'
                   >
                     {_('formCreate')}

@@ -26,6 +26,7 @@ export const FormFeedback = ({
           ? undefined
           : {
               borderColor: showError ? 'red' : 'green',
+              ...props.style,
             }
       }
     />

@@ -3,6 +3,7 @@
 // $FlowFixMe
 import type RemoteHandler from '@xen-orchestra/fs'
 import defer from 'golike-defer'
+import limitConcurrency from 'limit-concurrency-decorator'
 import { type Pattern, createPredicate } from 'value-matcher'
 import { type Readable, PassThrough } from 'stream'
 import { basename, dirname } from 'path'
@@ -35,6 +36,7 @@ import { translateLegacyJob } from './migration'
 type Mode = 'full' | 'delta'
 
 type Settings = {|
+  concurrency?: number,
   deleteFirst?: boolean,
   exportRetention?: number,
   snapshotRetention?: number,
@@ -356,7 +358,7 @@ export default class BackupNg {
           timezone: schedule.timezone,
         }
         const { calls } = status
-        await asyncMap(vms, async vm => {
+        let handleVm = async vm => {
           const { uuid } = vm
           const method = 'backup-ng'
           const params = {
@@ -422,7 +424,16 @@ export default class BackupNg {
             call.error = error
             call.end = Date.now()
           }
-        })
+        }
+        const concurrency: number | void = getSetting(
+          job.settings,
+          'concurrency',
+          ''
+        )
+        if (concurrency !== undefined) {
+          handleVm = limitConcurrency(concurrency)(handleVm)
+        }
+        await asyncMap(vms, handleVm)
         status.end = Date.now()
         return status
       }
